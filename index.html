@@ -88,7 +88,7 @@ textarea{width:100%;min-height:135px;resize:vertical;border:1px solid #484b50;bo
 <div id="translationStatus" class="status" aria-live="polite"></div>
 </section>
 
-<div class="footer">HEX decoding is local. Translation uses an online translation service only when you request a translation.</div>
+<div class="footer">HEX decoding is local. When Language Converter is ON, translation is performed automatically using an online translation service.</div>
 </main>
 
 <script>
@@ -123,17 +123,33 @@ function decodeUtf16BeHex(hex){
 
 function setStatus(el,msg,type=""){el.textContent=msg;el.className="status"+(type?" "+type:"");}
 
+let translationRequestId=0;
+let autoTranslateTimer;
+
+function scheduleAutoTranslate(){
+ clearTimeout(autoTranslateTimer);
+ if(!languageToggle.checked || !output.value.trim()) return;
+ autoTranslateTimer=setTimeout(()=>translateText(true),500);
+}
+
 function convert(){
- setStatus(inputStatus,"");setStatus(outputStatus,"");setStatus(translationStatus,"");
+ setStatus(inputStatus,"");setStatus(outputStatus,"");
  const hex=cleanHex(input.value);
- if(!hex){output.value="";charCount.textContent="0 characters";translation.value="";translationCount.textContent="0 characters";setStatus(inputStatus,"Please paste an encoded HEX string.","error");return;}
+ if(!hex){
+   output.value="";charCount.textContent="0 characters";
+   translation.value="";translationCount.textContent="0 characters";
+   setStatus(inputStatus,"Please paste an encoded HEX string.","error");
+   return;
+ }
  try{
    output.value=decodeUtf16BeHex(hex);
    charCount.textContent=output.value.length.toLocaleString()+" characters";
    setStatus(inputStatus,"Converted successfully.","success");
-   if(languageToggle.checked) translateText();
+   scheduleAutoTranslate();
  }catch(e){
-   output.value="";charCount.textContent="0 characters";setStatus(inputStatus,e.message,"error");
+   output.value="";charCount.textContent="0 characters";
+   translation.value="";translationCount.textContent="0 characters";
+   setStatus(inputStatus,e.message,"error");
  }
 }
 
@@ -144,7 +160,7 @@ async function copyText(text,el){
  setStatus(el,"Copied to clipboard.","success");
 }
 
-async function translateText(){
+async function translateText(isAutomatic=false){
  const text=output.value.trim();
  if(!text){setStatus(translationStatus,"Convert an SMS first.","error");return;}
  const source=$("sourceLang").value,target=$("targetLang").value;
@@ -152,37 +168,61 @@ async function translateText(){
  setStatus(translationStatus,"");translation.value="";translationCount.textContent="0 characters";
  detected.textContent="Source language: "+(source==="auto"?"auto-detect":$("sourceLang").selectedOptions[0].text);
  translationStatus.innerHTML='<span class="spinner"></span>Translating...';
+ const requestId=++translationRequestId;
  try{
-   // Public MyMemory endpoint. Text is sent only when the user clicks Translate.
+   // Public MyMemory endpoint. Text is sent automatically when Language Converter is ON.
    const params=new URLSearchParams({q:text,langpair:(source==="auto"?"autodetect":source)+"|"+target});
    const res=await fetch("https://api.mymemory.translated.net/get?"+params.toString());
    if(!res.ok)throw new Error("Translation service returned an error.");
    const data=await res.json();
    const translated=data?.responseData?.translatedText;
    if(!translated)throw new Error("No translation was returned.");
+   if(requestId!==translationRequestId)return;
    translation.value=translated;
    translationCount.textContent=translated.length.toLocaleString()+" characters";
    setStatus(translationStatus,"Translation completed.","success");
  }catch(e){
+   if(requestId!==translationRequestId)return;
    setStatus(translationStatus,"Translation failed. Check your internet connection or try again.","error");
  }
 }
 
 languageToggle.addEventListener("change",()=>{
  translationPanel.classList.toggle("active",languageToggle.checked);
- if(languageToggle.checked&&output.value.trim()) translateText();
- else if(!languageToggle.checked){translation.value="";translationCount.textContent="0 characters";setStatus(translationStatus,"");}
+ if(languageToggle.checked&&output.value.trim()) scheduleAutoTranslate();
+ else if(!languageToggle.checked){
+   clearTimeout(autoTranslateTimer);
+   translationRequestId++;
+   translation.value="";translationCount.textContent="0 characters";setStatus(translationStatus,"");
+ }
 });
 $("convertBtn").addEventListener("click",convert);
+let autoConvertTimer;
+input.addEventListener("input",()=>{
+ clearTimeout(autoConvertTimer);
+ autoConvertTimer=setTimeout(()=>{
+   const hex=cleanHex(input.value);
+   if(!hex){
+     clearTimeout(autoTranslateTimer);translationRequestId++;
+     output.value="";charCount.textContent="0 characters";translation.value="";translationCount.textContent="0 characters";
+     setStatus(inputStatus,"");setStatus(outputStatus,"");setStatus(translationStatus,"");
+     return;
+   }
+   if(!/^[0-9a-fA-F]+$/.test(hex) || hex.length%4!==0){
+     return;
+   }
+   convert();
+ },300);
+});
 $("clearBtn").addEventListener("click",()=>{
  input.value="";output.value="";translation.value="";charCount.textContent="0 characters";translationCount.textContent="0 characters";
  setStatus(inputStatus,"");setStatus(outputStatus,"");setStatus(translationStatus,"");detected.textContent="Source language: waiting for decoded text.";input.focus();
 });
 $("copyBtn").addEventListener("click",()=>copyText(output.value,outputStatus));
 $("copyTranslationBtn").addEventListener("click",()=>copyText(translation.value,translationStatus));
-$("translateBtn").addEventListener("click",translateText);
-$("sourceLang").addEventListener("change",()=>{if(languageToggle.checked&&output.value.trim())translateText();});
-$("targetLang").addEventListener("change",()=>{if(languageToggle.checked&&output.value.trim())translateText();});
+$("translateBtn").addEventListener("click",()=>translateText(false));
+$("sourceLang").addEventListener("change",()=>{if(languageToggle.checked&&output.value.trim())scheduleAutoTranslate();});
+$("targetLang").addEventListener("change",()=>{if(languageToggle.checked&&output.value.trim())scheduleAutoTranslate();});
 input.addEventListener("keydown",e=>{if((e.ctrlKey||e.metaKey)&&e.key==="Enter")convert();});
 })();
 </script>
